@@ -7,10 +7,6 @@ abort("The Rails environment is running in production mode!") if Rails.env.produ
 require 'rspec/rails'
 # Add additional requires below this line. Rails is not loaded until this point!
 
-require 'rake'
-Rails.application.load_tasks
-Rake::Task["db:reset"].invoke
-
 # auto-require all ruby files in the support directory
 Dir[Rails.root.join('spec', 'support', '*.rb')].each { |f| require f }
 
@@ -54,5 +50,4 @@ RSpec.configure do |config|
       with.library :rails
     end
   end
-
 end

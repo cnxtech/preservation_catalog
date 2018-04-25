@@ -11,7 +11,10 @@ Rails.application.load_tasks
 require 'rubocop/rake_task'
 RuboCop::RakeTask.new
 
-task default: [:spec, :rubocop]
+task default: [:ci]
+
+desc 'Run Continuous Integration Tests'
+task ci: ['db:setup', :spec, :rubocop]
 
 task :travis_setup_postgres do
   sh("psql -U postgres -f db/scripts/pres_test_setup.sql")

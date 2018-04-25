@@ -6,7 +6,6 @@ services:
   - postgresql
 before_script:
   - bundle exec rake travis_setup_postgres
-
 bundler_args: --without 'production development deploy'
 
 notifications:
