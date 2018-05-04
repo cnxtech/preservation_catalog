@@ -36,45 +36,31 @@ RSpec.describe PreservedObjectHandler do
         context 'PreservedCopy' do
           context 'changed' do
             it 'last_version_audit' do
-              orig = Time.current
-              pc.last_version_audit = orig
+              pc.last_version_audit = Time.current
               pc.save!
-              po_handler.check_existence
-              expect(pc.reload.last_version_audit).to be > orig
+              expect { po_handler.check_existence }.to change { pc.reload.last_version_audit }
             end
             it 'updated_at' do
-              orig = pc.updated_at
-              po_handler.check_existence
-              expect(pc.reload.updated_at).to be > orig
+              expect { po_handler.check_existence }.to change { pc.reload.updated_at }
             end
           end
           context 'unchanged' do
             it 'status' do
-              orig = pc.status
-              po_handler.check_existence
-              expect(pc.reload.status).to eq orig
+              expect { po_handler.check_existence }.not_to change { pc.reload.status }
             end
             it 'version' do
-              orig = pc.version
-              po_handler.check_existence
-              expect(pc.reload.version).to eq orig
+              expect { po_handler.check_existence }.not_to change { pc.reload.version }
             end
             it 'size' do
-              orig = pc.size
-              po_handler.check_existence
-              expect(pc.reload.size).to eq orig
+              expect { po_handler.check_existence }.not_to change { pc.reload.size }
             end
             it 'last_moab_validation' do
-              orig = pc.last_moab_validation
-              po_handler.check_existence
-              expect(pc.reload.last_moab_validation).to eq orig
+              expect { po_handler.check_existence }.not_to change { pc.reload.last_moab_validation }
             end
           end
         end
         it 'PreservedObject is not updated' do
-          orig = po.updated_at
-          po_handler.check_existence
-          expect(po.reload.updated_at).to eq orig
+          expect { po_handler.check_existence }.not_to change { pc.reload.updated_at }
         end
         it_behaves_like 'calls AuditResults.report_results', :check_existence
         it 'does not validate moab' do
@@ -132,16 +118,12 @@ RSpec.describe PreservedObjectHandler do
                 expect(pc.reload.last_moab_validation).to be > orig
               end
               it 'last_version_audit' do
-                orig = Time.current
-                pc.last_version_audit = orig
+                pc.last_version_audit = Time.current
                 pc.save!
-                po_handler.check_existence
-                expect(pc.reload.last_version_audit).to be > orig
+                expect { po_handler.check_existence }.to change { pc.reload.last_version_audit }
               end
               it 'updated_at' do
-                orig = pc.updated_at
-                po_handler.check_existence
-                expect(pc.reload.updated_at).to be > orig
+                expect { po_handler.check_existence }.to change { pc.reload.updated_at }
               end
               it 'status becomes "ok" if it was invalid_moab (b/c after validation)' do
                 pc.status = PreservedCopy::INVALID_MOAB_STATUS
@@ -151,20 +133,14 @@ RSpec.describe PreservedObjectHandler do
               end
             end
             context 'unchanged' do
-              before do
-                allow(po_handler).to receive(:moab_validation_errors).and_return([])
-              end
+              before { allow(po_handler).to receive(:moab_validation_errors).and_return([]) }
               it 'status if former status was ok' do
-                pc.status = PreservedCopy::OK_STATUS
                 pc.save!
-                po_handler.check_existence
-                expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
+                expect { po_handler.check_existence }.not_to change { pc.reload.status }
               end
               it 'size if incoming size is nil' do
-                orig = pc.size
                 po_handler = described_class.new(druid, incoming_version, nil, ep)
-                po_handler.check_existence
-                expect(pc.reload.size).to eq orig
+                expect { po_handler.check_existence }.not_to change { pc.reload.size }
               end
             end
           end
@@ -191,10 +167,8 @@ RSpec.describe PreservedObjectHandler do
 
           context 'returns' do
             let(:results) { po_handler.check_existence }
+            before { allow(po_handler).to receive(:moab_validation_errors).and_return([]) }
 
-            before do
-              allow(po_handler).to receive(:moab_validation_errors).and_return([])
-            end
             it '1 result' do
               expect(results).to be_an_instance_of Array
               expect(results.size).to eq 1
@@ -243,14 +217,10 @@ RSpec.describe PreservedObjectHandler do
           context 'PreservedCopy' do
             context 'changed' do
               it 'last_version_audit' do
-                orig = invalid_pc.last_version_audit
-                invalid_po_handler.check_existence
-                expect(invalid_pc.reload.last_version_audit).to be > orig
+                expect { invalid_po_handler.check_existence }.to change { invalid_pc.reload.last_version_audit }
               end
               it 'last_moab_validation' do
-                orig = invalid_pc.last_moab_validation
-                invalid_po_handler.check_existence
-                expect(invalid_pc.reload.last_moab_validation).to be > orig
+                expect { invalid_po_handler.check_existence }.to change { invalid_pc.reload.last_moab_validation }
               end
               it 'updated_at' do
                 orig = invalid_pc.updated_at
@@ -272,14 +242,10 @@ RSpec.describe PreservedObjectHandler do
             end
             context 'unchanged' do
               it 'version' do
-                orig = invalid_pc.version
-                invalid_po_handler.check_existence
-                expect(invalid_pc.reload.version).to eq orig
+                expect { invalid_po_handler.check_existence }.not_to change { invalid_pc.reload.version }
               end
               it 'size' do
-                orig = invalid_pc.size
-                invalid_po_handler.check_existence
-                expect(invalid_pc.reload.size).to eq orig
+                expect { invalid_po_handler.check_existence }.not_to change { invalid_pc.reload.size }
               end
             end
           end
@@ -323,25 +289,21 @@ RSpec.describe PreservedObjectHandler do
 
         context 'incoming_version > db version' do
           let(:incoming_version) { pc.version + 1 }
+          before { allow(po_handler).to receive(:moab_validation_errors).and_return([]) }
 
           it 'had OK_STATUS, version increased, should still have OK_STATUS' do
             pc.status = PreservedCopy::OK_STATUS
             pc.save!
-            allow(po_handler).to receive(:moab_validation_errors).and_return([])
-            po_handler.check_existence
-            expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
+            expect { po_handler.check_existence }.not_to change { pc.reload.status }
           end
           it 'had INVALID_MOAB_STATUS, was remediated, should now have OK_STATUS' do
             pc.status = PreservedCopy::INVALID_MOAB_STATUS
             pc.save!
-            allow(po_handler).to receive(:moab_validation_errors).and_return([])
-            po_handler.check_existence
-            expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
+            expect { po_handler.check_existence }.to change { pc.reload.status }.to(PreservedCopy::OK_STATUS)
           end
           it 'had UNEXPECTED_VERSION_ON_STORAGE_STATUS, seems to have an acceptable version now' do
             pc.status = PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
             pc.save!
-            allow(po_handler).to receive(:moab_validation_errors).and_return([])
             po_handler.check_existence
             expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
           end
@@ -398,18 +360,17 @@ RSpec.describe PreservedObjectHandler do
 
       it 'calls PreservedCopy.save! (but not PreservedObject.save!) if the existing record is NOT altered' do
         po_handler = described_class.new(druid, 1, 1, ep)
-        po = instance_double(PreservedObject)
-        pc = instance_double(PreservedCopy)
+        po = instance_double(PreservedObject, current_version: 1, save!: nil)
+        pc = instance_double(PreservedCopy,
+          matches_po_current_version?:true,
+          status: PreservedCopy::OK_STATUS,
+          version: 1,
+          update_audit_timestamps: nil,
+          changed?: false,
+          save!: nil
+        )
         allow(PreservedObject).to receive(:find_by!).with(druid: druid).and_return(po)
-        allow(po).to receive(:current_version).and_return(1)
-        allow(po).to receive(:save!)
         allow(PreservedCopy).to receive(:find_by!).with(preserved_object: po, endpoint: ep).and_return(pc)
-        allow(pc).to receive(:matches_po_current_version?).and_return(true)
-        allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-        allow(pc).to receive(:version).and_return(1)
-        allow(pc).to receive(:update_audit_timestamps)
-        allow(pc).to receive(:changed?).and_return(false)
-        allow(pc).to receive(:save!)
         po_handler.check_existence
         expect(po).not_to have_received(:save!)
         expect(pc).to have_received(:save!)
@@ -587,12 +548,10 @@ RSpec.describe PreservedObjectHandler do
               expect(results).to include(a_hash_including(code => exp_moab_errs_msg))
             end
             it 'DB_OBJ_DOES_NOT_EXIST results' do
-              code = AuditResults::DB_OBJ_DOES_NOT_EXIST
-              expect(results).to include(a_hash_including(code => exp_po_not_exist_msg))
+              expect(results).to include(a_hash_including(AuditResults::DB_OBJ_DOES_NOT_EXIST => exp_po_not_exist_msg))
             end
             it 'CREATED_NEW_OBJECT result' do
-              code = AuditResults::CREATED_NEW_OBJECT
-              expect(results).to include(a_hash_including(code => exp_obj_created_msg))
+              expect(results).to include(a_hash_including(AuditResults::CREATED_NEW_OBJECT => exp_obj_created_msg))
             end
           end
 
