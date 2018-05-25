@@ -3,10 +3,6 @@ RSpec.shared_examples "attributes validated" do |method_sym|
   let(:bad_version) { 'vv666' }
   let(:bad_size) { '-666' }
   let(:bad_endpoint) { nil }
-  let(:bad_druid_msg) { 'Druid is invalid' }
-  let(:bad_version_msg) { 'Incoming version is not a number' }
-  let(:bad_size_msg) { 'Incoming size must be greater than 0' }
-  let(:bad_endpoint_msg) { "Endpoint must be an actual Endpoint" }
 
   context 'returns' do
     let!(:result) do
@@ -28,16 +24,16 @@ RSpec.shared_examples "attributes validated" do |method_sym|
         expect(msg).to match(Regexp.escape("encountered validation error(s): "))
       end
       it "druid error" do
-        expect(msg).to match(bad_druid_msg)
+        expect(msg).to match('Druid is invalid')
       end
       it "version error" do
-        expect(msg).to match(bad_version_msg)
+        expect(msg).to match('Incoming version is not a number')
       end
       it "size error" do
-        expect(msg).to match(bad_size_msg)
+        expect(msg).to match('Incoming size must be greater than 0')
       end
       it "endpoint error" do
-        expect(msg).to match(bad_endpoint_msg)
+        expect(msg).to match('Endpoint must be an actual Endpoint')
       end
     end
   end
@@ -57,10 +53,9 @@ end
 RSpec.shared_examples 'druid not in catalog' do |method_sym|
   let(:druid) { 'rr111rr1111' }
   let(:exp_msg) { "PreservedObject.* db object does not exist" }
-  let(:results) do
-    allow(Rails.logger).to receive(:log)
-    po_handler.send(method_sym)
-  end
+  let(:results) { po_handler.send(method_sym) }
+
+  before { allow(Rails.logger).to receive(:log) }
 
   it 'DB_OBJ_DOES_NOT_EXIST error' do
     code = AuditResults::DB_OBJ_DOES_NOT_EXIST
@@ -69,20 +64,17 @@ RSpec.shared_examples 'druid not in catalog' do |method_sym|
 end
 
 RSpec.shared_examples 'PreservedCopy does not exist' do |method_sym|
-  before do
-    PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy)
-  end
   let(:exp_msg) { "#<ActiveRecord::RecordNotFound: foo> db object does not exist" }
   let(:results) do
-    allow(Rails.logger).to receive(:log)
-    po = instance_double(PreservedObject)
-    allow(po).to receive(:current_version).and_return(2)
-    allow(po).to receive(:current_version=)
-    allow(po).to receive(:changed?).and_return(true)
-    allow(po).to receive(:save!)
+    po = build(:preserved_object, current_version: 2)
     allow(PreservedObject).to receive(:find_by!).and_return(po)
     allow(PreservedCopy).to receive(:find_by!).and_raise(ActiveRecord::RecordNotFound, 'foo')
     po_handler.send(method_sym)
+  end
+
+  before do
+    allow(Rails.logger).to receive(:log)
+    PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy)
   end
 
   it 'DB_OBJ_DOES_NOT_EXIST error' do
@@ -236,8 +228,7 @@ RSpec.shared_examples 'unexpected version with validation' do |method_sym, incom
     end
   end
   it "ensures status of PreservedCopy is #{new_status}" do
-    pc.status = PreservedCopy::OK_STATUS
-    pc.save!
+    pc.ok!
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq new_status
   end
@@ -364,16 +355,14 @@ RSpec.shared_examples 'PreservedObject current_version does not match online PC 
 end
 
 RSpec.shared_examples 'cannot validate something with INVALID_CHECKSUM_STATUS' do |method_sym|
+  before { pc.invalid_checksum! }
+
   it 'PreservedCopy keeps INVALID_CHECKSUM_STATUS' do
-    pc.status = PreservedCopy::INVALID_CHECKSUM_STATUS
-    pc.save!
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::INVALID_CHECKSUM_STATUS
   end
 
   it 'has an AuditResults entry indicating inability to check the given status' do
-    pc.status = PreservedCopy::INVALID_CHECKSUM_STATUS
-    pc.save!
     po_handler.send(method_sym)
     expect(po_handler.results.contains_result_code?(AuditResults::UNABLE_TO_CHECK_STATUS)).to eq true
   end
@@ -383,50 +372,43 @@ RSpec.shared_examples 'PreservedCopy already has a status other than OK_STATUS, 
   let(:incoming_version) { pc.version }
 
   it 'had OK_STATUS, and is still OK' do
-    pc.status = PreservedCopy::OK_STATUS
-    pc.save!
+    pc.ok!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
   end
   it 'had UNEXPECTED_VERSION_ON_STORAGE_STATUS, but is now OK' do
-    pc.status = PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
-    pc.save!
+    pc.unexpected_version_on_storage!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
   end
   it 'had UNEXPECTED_VERSION_ON_STORAGE_STATUS, but is now INVALID_MOAB_STATUS' do
-    pc.status = PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
-    pc.save!
+    pc.unexpected_version_on_storage!
     allow(po_handler).to receive(:moab_validation_errors).and_return([{ Moab::StorageObjectValidator::MISSING_DIR => 'err msg' }])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::INVALID_MOAB_STATUS
   end
   it 'had INVALID_MOAB_STATUS, but is now OK' do
-    pc.status = PreservedCopy::INVALID_MOAB_STATUS
-    pc.save!
+    pc.invalid_moab!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
   end
   it 'had VALIDITY_UNKNOWN_STATUS, but is now OK' do
-    pc.status = PreservedCopy::VALIDITY_UNKNOWN_STATUS
-    pc.save!
+    pc.validity_unknown!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
   end
   it 'had VALIDITY_UNKNOWN_STATUS, but is now INVALID_MOAB_STATUS' do
-    pc.status = PreservedCopy::VALIDITY_UNKNOWN_STATUS
-    pc.save!
+    pc.validity_unknown!
     allow(po_handler).to receive(:moab_validation_errors).and_return([{ Moab::StorageObjectValidator::MISSING_DIR => 'err msg' }])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::INVALID_MOAB_STATUS
   end
   it 'had UNEXPECTED_VERSION_ON_STORAGE_STATUS, seems to have an acceptable version now' do
-    pc.status = PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
-    pc.save!
+    pc.unexpected_version_on_storage!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
@@ -450,43 +432,37 @@ RSpec.shared_examples 'PreservedCopy already has a status other than OK_STATUS, 
   let(:incoming_version) { pc.version - 1 }
 
   it 'had OK_STATUS, but is now UNEXPECTED_VERSION_ON_STORAGE_STATUS' do
-    pc.status = PreservedCopy::OK_STATUS
-    pc.save!
+    pc.ok!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
   end
   it 'had OK_STATUS, but is now INVALID_MOAB_STATUS' do
-    pc.status = PreservedCopy::OK_STATUS
-    pc.save!
+    pc.ok!
     allow(po_handler).to receive(:moab_validation_errors).and_return([{ Moab::StorageObjectValidator::MISSING_DIR => 'err msg' }])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::INVALID_MOAB_STATUS
   end
   it 'had INVALID_MOAB_STATUS, was made to a valid moab, but is now UNEXPECTED_VERSION_ON_STORAGE_STATUS' do
-    pc.status = PreservedCopy::INVALID_MOAB_STATUS
-    pc.save!
+    pc.invalid_moab!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
   end
   it 'had UNEXPECTED_VERSION_ON_STORAGE_STATUS, still seeing an unexpected version' do
-    pc.status = PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
-    pc.save!
+    pc.unexpected_version_on_storage!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS
   end
   it 'had VALIDITY_UNKNOWN_STATUS, but is now INVALID_MOAB_STATUS' do
-    pc.status = PreservedCopy::VALIDITY_UNKNOWN_STATUS
-    pc.save!
+    pc.validity_unknown!
     allow(po_handler).to receive(:moab_validation_errors).and_return([{ Moab::StorageObjectValidator::MISSING_DIR => 'err msg' }])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::INVALID_MOAB_STATUS
   end
   it 'had VALIDITY_UNKNOWN_STATUS, but is now UNEXPECTED_VERSION_ON_STORAGE_STATUS' do
-    pc.status = PreservedCopy::VALIDITY_UNKNOWN_STATUS
-    pc.save!
+    pc.validity_unknown!
     allow(po_handler).to receive(:moab_validation_errors).and_return([])
     po_handler.send(method_sym)
     expect(pc.reload.status).to eq PreservedCopy::UNEXPECTED_VERSION_ON_STORAGE_STATUS

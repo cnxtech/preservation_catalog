@@ -46,6 +46,10 @@ Layout/SpaceInsideBrackets:
     - 'app/services/preserved_object_handler.rb' # line 126 is clearer with the spaces
 
 # --- Lint ---
+Lint/AmbiguousBlockAssociation:
+  Exclude:
+    - 'spec/**/*_spec.rb' # `expect { x.do }.to change { x.counter }` is not ambiguous (and cannot be parenthesized)
+
 Lint/HandleExceptions:
   Exclude:
     - 'spec/lib/audit/moab_to_catalog_spec.rb' # So method does not stop executing and can test the correct case

@@ -5,10 +5,11 @@ RSpec.describe PreservedObjectHandler do
   let(:druid) { 'ab123cd4567' }
   let(:incoming_version) { 6 }
   let(:incoming_size) { 9876 }
-  let!(:default_prez_policy) { PreservationPolicy.default_policy }
-  let(:po) { PreservedObject.find_by(druid: druid) }
-  let(:ep) { Endpoint.find_by(storage_location: 'spec/fixtures/storage_root01/moab_storage_trunk') }
-  let(:pc) { PreservedCopy.find_by(preserved_object: po, endpoint: ep) }
+  let(:default_prez_policy) { PreservationPolicy.default_policy }
+  let(:ep) { Endpoint.find_by!(storage_location: 'spec/fixtures/storage_root01/moab_storage_trunk') }
+  let(:pc) { PreservedCopy.find_by!(preserved_object: po, endpoint: ep) }
+  let(:po) { PreservedObject.find_by!(druid: druid) }
+  let(:po2) { PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy) }
   let(:db_update_failed_prefix) { "db update failed" }
 
   let(:po_handler) { described_class.new(druid, incoming_version, incoming_size, ep) }
@@ -18,13 +19,12 @@ RSpec.describe PreservedObjectHandler do
 
     context 'in Catalog' do
       before do
-        po = PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy)
         @pc = PreservedCopy.create!(
-          preserved_object: po,
-          version: po.current_version,
+          preserved_object: po2,
+          version: po2.current_version,
           size: 1,
           endpoint: ep,
-          status: PreservedCopy::OK_STATUS, # pretending we checked for moab validation errs at create time
+          status: 'ok', # pretending we checked for moab validation errs at create time
           last_version_audit: Time.current,
           last_moab_validation: Time.current
         )
@@ -34,10 +34,7 @@ RSpec.describe PreservedObjectHandler do
         context 'PreservedCopy' do
           context 'changed' do
             it "version becomes incoming_version" do
-              orig = pc.version
-              po_handler.update_version
-              expect(pc.reload.version).to be > orig
-              expect(pc.version).to eq incoming_version
+              expect { po_handler.update_version && pc.reload }.to change { pc.version }.to(incoming_version)
             end
             it 'last_version_audit' do
               orig = pc.last_version_audit
@@ -45,48 +42,35 @@ RSpec.describe PreservedObjectHandler do
               expect(pc.reload.last_version_audit).to be > orig
             end
             it 'size if supplied' do
-              orig = pc.size
-              po_handler.update_version
-              expect(pc.reload.size).to eq incoming_size
-              expect(pc.size).not_to eq orig
+              expect { po_handler.update_version && pc.reload }.to change { pc.size }.to(incoming_size)
             end
           end
           context 'unchanged' do
             it 'size if incoming size is nil' do
-              orig = pc.size
               po_handler = described_class.new(druid, incoming_version, nil, ep)
-              po_handler.update_version
-              expect(pc.reload.size).to eq orig
+              expect { po_handler.update_version }.not_to change { pc.reload.size }
             end
             it 'status' do
-              orig = pc.status
-              po_handler.update_version
-              expect(pc.reload.status).to eq orig
+              expect { po_handler.update_version }.not_to change { pc.reload.status }
               skip 'is there a scenario when status should change here?  See #431'
             end
             it 'last_moab_validation' do
-              orig = pc.last_moab_validation
-              po_handler.update_version
-              expect(pc.reload.last_moab_validation).to eq orig
+              expect { po_handler.update_version }.not_to change { pc.reload.last_moab_validation }
             end
           end
-          context 'PreservedObject' do
-            context 'changed' do
-              it "current_version becomes incoming version" do
-                orig = po.current_version
-                po_handler.update_version
-                expect(po.reload.current_version).to be > orig
-                expect(po.current_version).to eq incoming_version
-              end
-            end
+        end
+
+        context 'PreservedObject changed' do
+          it "current_version becomes incoming version" do
+            expect { po_handler.update_version }.to change { po.reload.current_version }.to(incoming_version)
           end
         end
         it_behaves_like 'calls AuditResults.report_results', :update_version
 
         context 'returns' do
-          let!(:results) { po_handler.update_version }
+          let(:results) { po_handler.update_version }
 
-          it '1 results' do
+          it '1 result' do
             expect(results).to be_an_instance_of Array
             expect(results.size).to eq 1
           end
@@ -117,127 +101,81 @@ RSpec.describe PreservedObjectHandler do
 
       context 'db update error' do
         let(:result_code) { AuditResults::DB_UPDATE_FAILED }
+        let(:results) { po_handler.update_version }
+        let(:po) { build(:preserved_object) }
+        let(:pc) { build(:preserved_copy, endpoint: ep) }
 
-        context 'PreservedCopy' do
-          context 'ActiveRecordError' do
-            let(:results) do
-              allow(Rails.logger).to receive(:log)
-              po = instance_double('PreservedObject')
-              allow(po).to receive(:current_version).and_return(1)
-              allow(PreservedObject).to receive(:find_by!).with(druid: druid).and_return(po)
-              pc = instance_double('PreservedCopy')
-              allow(PreservedCopy).to receive(:find_by!).with(preserved_object: po, endpoint: ep).and_return(pc)
-              allow(pc).to receive(:version).and_return(1)
-              allow(pc).to receive(:upd_audstamps_version_size)
-              allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-              allow(pc).to receive(:status=)
-              allow(pc).to receive(:update_audit_timestamps)
-              allow(pc).to receive(:changed?).and_return(true)
-              allow(pc).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo')
-              allow(pc).to receive(:matches_po_current_version?).and_return(true)
-              po_handler.update_version
-            end
+        before do
+          allow(Rails.logger).to receive(:log)
+          allow(PreservedObject).to receive(:find_by!).with(druid: druid).and_return(po)
+          allow(PreservedCopy).to receive(:find_by!).with(preserved_object: po, endpoint: ep).and_return(pc)
+        end
 
-            context 'DB_UPDATE_FAILED error' do
-              it 'prefix' do
-                expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
-              end
-              it 'specific exception raised' do
-                expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
-              end
-              it "exception's message" do
-                expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
-              end
-            end
+        context 'PreservedCopy ActiveRecordError' do
+          before { allow(pc).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo') }
+
+          it 'prefix' do
+            expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
+          end
+          it 'specific exception raised' do
+            expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
+          end
+          it "exception's message" do
+            expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
           end
         end
-        context 'PreservedObject' do
-          context 'ActiveRecordError' do
-            let(:results) do
-              allow(Rails.logger).to receive(:log)
-              po = instance_double('PreservedObject')
-              allow(po).to receive(:current_version).and_return(5)
-              allow(po).to receive(:current_version=).with(incoming_version)
-              allow(po).to receive(:changed?).and_return(true)
-              allow(po).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo')
-              allow(PreservedObject).to receive(:find_by).with(druid: druid).and_return(po)
-              pc = instance_double('PreservedCopy')
-              allow(PreservedCopy).to receive(:find_by).with(preserved_object: po, endpoint: ep).and_return(pc)
-              allow(pc).to receive(:version).and_return(5)
-              allow(pc).to receive(:upd_audstamps_version_size).with(boolean, incoming_version, incoming_size)
-              allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-              allow(pc).to receive(:status=)
-              allow(pc).to receive(:update_audit_timestamps)
-              allow(pc).to receive(:changed?).and_return(true)
-              allow(pc).to receive(:save!)
-              allow(pc).to receive(:matches_po_current_version?).and_return(true)
-              po_handler.update_version
-            end
 
-            context 'DB_UPDATE_FAILED error' do
-              it 'prefix' do
-                expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
-              end
-              it 'specific exception raised' do
-                expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
-              end
-              it "exception's message" do
-                expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
-              end
-            end
+        context 'PreservedObject ActiveRecordError' do
+          let(:po) { build(:preserved_object, current_version: 5) }
+          # let(:pc) { build(:preserved_copy, version: po.current_version) } # would prefer this, but hit snags
+          let(:pc) do
+            pres_copy = instance_double(PreservedCopy, version: 5, changed?: true, matches_po_current_version?: true, status: 'ok')
+            allow(pres_copy).to receive(:upd_audstamps_version_size).with(boolean, incoming_version, incoming_size)
+            allow(pres_copy).to receive(:status=)
+            allow(pres_copy).to receive(:update_audit_timestamps)
+            allow(pres_copy).to receive(:save!)
+            pres_copy
+          end
+
+          before { allow(po).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo') }
+
+          it 'prefix' do
+            expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
+          end
+          it 'specific exception raised' do
+            expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
+          end
+          it "exception's message" do
+            expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
           end
         end
       end
 
       it 'calls PreservedObject.save! and PreservedCopy.save! if the records are altered' do
-        po = instance_double(PreservedObject)
+        po = build(:preserved_object)
+        pc = build(:preserved_copy, endpoint: ep)
         allow(PreservedObject).to receive(:find_by).with(druid: druid).and_return(po)
-        allow(po).to receive(:current_version).and_return(1)
-        allow(po).to receive(:current_version=).with(incoming_version)
-        allow(po).to receive(:changed?).and_return(true)
-        allow(po).to receive(:save!)
-        pc = instance_double(PreservedCopy)
         allow(PreservedCopy).to receive(:find_by).with(preserved_object: po, endpoint: ep).and_return(pc)
-        allow(pc).to receive(:version).and_return(1)
-        allow(pc).to receive(:upd_audstamps_version_size).with(boolean, incoming_version, incoming_size)
-        allow(pc).to receive(:endpoint).with(ep)
-        allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-        allow(pc).to receive(:status=)
-        allow(pc).to receive(:update_audit_timestamps)
-        allow(pc).to receive(:changed?).and_return(true)
-        allow(pc).to receive(:save!)
-        allow(pc).to receive(:matches_po_current_version?).and_return(true)
+        expect(po).to receive(:save!)
+        expect(pc).to receive(:save!)
         po_handler.update_version
-        expect(po).to have_received(:save!)
-        expect(pc).to have_received(:save!)
       end
 
       it 'does not call PreservedObject.save when PreservedCopy only has timestamp updates' do
-        po = instance_double(PreservedObject)
+        po = build(:preserved_object)
+        pc = build(:preserved_copy, endpoint: ep)
         allow(PreservedObject).to receive(:find_by).with(druid: druid).and_return(po)
-        allow(po).to receive(:current_version).and_return(1)
-        allow(po).to receive(:touch)
-        allow(po).to receive(:save!)
-        pc = instance_double(PreservedCopy)
         allow(PreservedCopy).to receive(:find_by).with(preserved_object: po, endpoint: ep).and_return(pc)
-        allow(pc).to receive(:version).and_return(1)
-        allow(pc).to receive(:endpoint).with(ep)
-        allow(pc).to receive(:update_audit_timestamps)
-        allow(pc).to receive(:update_status)
-        allow(pc).to receive(:changed?).and_return(true)
-        allow(pc).to receive(:save!)
-        allow(pc).to receive(:matches_po_current_version?).and_return(true)
         po_handler = described_class.new(druid, 1, 1, ep)
+        expect(pc).to receive(:save!)
+        expect(po).not_to receive(:save!)
         po_handler.update_version
-        expect(po).not_to have_received(:save!)
-        expect(pc).to have_received(:save!)
       end
 
       it 'logs a debug message' do
-        msg = "update_version #{druid} called"
         allow(Rails.logger).to receive(:debug)
         po_handler.update_version
-        expect(Rails.logger).to have_received(:debug).with(msg)
+        expect(Rails.logger).to have_received(:debug).with("update_version #{druid} called")
       end
     end
 
@@ -253,14 +191,15 @@ RSpec.describe PreservedObjectHandler do
     it_behaves_like 'attributes validated', :update_version_after_validation
 
     it 'calls Stanford::StorageObjectValidator.validation_errors for moab' do
-      mock_sov = instance_double(Stanford::StorageObjectValidator)
-      expect(mock_sov).to receive(:validation_errors).and_return([])
+      mock_sov = instance_double(Stanford::StorageObjectValidator, validation_errors: [])
       allow(Stanford::StorageObjectValidator).to receive(:new).and_return(mock_sov)
       po_handler.update_version_after_validation
     end
 
     context 'in Catalog' do
       context 'when moab is valid' do
+        let(:po) { PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy) }
+
         before do
           t = Time.current
           PreservedCopy.create!(
@@ -273,8 +212,6 @@ RSpec.describe PreservedObjectHandler do
             last_moab_validation: t
           )
         end
-        let(:po) { PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy) }
-        let(:pc) { PreservedCopy.find_by!(preserved_object: po, endpoint: ep) }
 
         context 'PreservedCopy' do
           context 'changed' do
@@ -289,41 +226,30 @@ RSpec.describe PreservedObjectHandler do
               expect(pc.reload.last_moab_validation).to be > orig
             end
             it 'version becomes incoming_version' do
-              orig = pc.version
-              po_handler.update_version_after_validation
-              expect(pc.reload.version).to be > orig
-              expect(pc.version).to eq incoming_version
+              expect { po_handler.update_version_after_validation && pc.reload }.to change { pc.version }.to(incoming_version)
             end
             it 'size if supplied' do
-              orig = pc.size
-              po_handler.update_version_after_validation
-              expect(pc.reload.size).to eq incoming_size
-              expect(pc.size).not_to eq orig
+              expect { po_handler.update_version_after_validation && pc.reload }.to change { pc.size }.to(incoming_size)
             end
           end
           context 'unchanged' do
             it 'size if incoming size is nil' do
-              orig = pc.size
               po_handler = described_class.new(druid, incoming_version, nil, ep)
-              po_handler.update_version_after_validation
-              expect(pc.reload.size).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { pc.reload.size }
             end
             it 'status' do
-              orig = pc.status
-              po_handler.update_version_after_validation
-              expect(pc.reload.status).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { pc.reload.status }
               skip 'is there a scenario when status should change here?  See #431'
             end
           end
         end
-        context 'PreservedObject' do
-          context 'changed' do
-            it 'current_version' do
-              orig = po.current_version
-              po_handler.update_version_after_validation
-              expect(po.reload.current_version).to eq po_handler.incoming_version
-              expect(po.current_version).to be > orig
-            end
+
+        context 'PreservedObject changed' do
+          it 'current_version' do
+            orig = po.current_version
+            po_handler.update_version_after_validation
+            expect(po.reload.current_version).to eq po_handler.incoming_version
+            expect(po.current_version).to be > orig
           end
         end
 
@@ -334,10 +260,9 @@ RSpec.describe PreservedObjectHandler do
         end
 
         it 'updates PreservedCopy status to "ok" if it was "moab_invalid"' do
-          pc.status = PreservedCopy::INVALID_MOAB_STATUS
-          pc.save!
+          pc.invalid_moab!
           po_handler.update_version_after_validation
-          expect(pc.reload.status).to eq PreservedCopy::OK_STATUS
+          expect(pc.reload.status).to eq 'ok'
         end
       end
 
@@ -353,11 +278,10 @@ RSpec.describe PreservedObjectHandler do
             endpoint.storage_location = storage_dir
             endpoint.recovery_cost = Settings.endpoints.storage_root_defaults.recovery_cost
           end
-          po = PreservedObject.create!(druid: druid, current_version: 2, preservation_policy: default_prez_policy)
           t = Time.current
           PreservedCopy.create!(
-            preserved_object: po,
-            version: po.current_version,
+            preserved_object: po2,
+            version: po2.current_version,
             size: 1,
             endpoint: ep,
             status: PreservedCopy::OK_STATUS, # pretending we checked for moab validation errs at create time
@@ -382,35 +306,26 @@ RSpec.describe PreservedObjectHandler do
           end
           context 'unchanged' do
             it 'version' do
-              orig = pc.version
-              po_handler.update_version_after_validation
-              expect(pc.reload.version).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { pc.reload.version }
             end
             it 'size' do
-              orig = pc.size
-              po_handler.update_version_after_validation
-              expect(pc.reload.size).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { pc.reload.size }
             end
             it 'last_version_audit' do
-              orig = pc.last_version_audit
-              po_handler.update_version_after_validation
-              expect(pc.reload.last_version_audit).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { pc.reload.last_version_audit }
             end
           end
         end
         context 'PreservedObject' do
           context 'unchanged' do
             it 'current_version' do
-              orig = po.current_version
-              po_handler.update_version_after_validation
-              expect(po.current_version).to eq orig
+              expect { po_handler.update_version_after_validation }.not_to change { po.reload.current_version }
             end
           end
         end
 
         it 'ensures PreservedCopy status is invalid' do
-          pc.status = PreservedCopy::OK_STATUS
-          pc.save!
+          pc.ok!
           po_handler.update_version_after_validation
           expect(pc.reload.status).to eq PreservedCopy::INVALID_MOAB_STATUS
         end
@@ -423,24 +338,14 @@ RSpec.describe PreservedObjectHandler do
         end
 
         it 'does not call PreservedObject.save! when PreservedCopy only has timestamp updates' do
-          po = instance_double(PreservedObject)
+          po = build(:preserved_object)
+          pc = build(:preserved_copy)
           allow(PreservedObject).to receive(:find_by).with(druid: druid).and_return(po)
-          allow(po).to receive(:save!)
-          pc = instance_double(PreservedCopy)
           allow(PreservedCopy).to receive(:find_by).with(preserved_object: po, endpoint: ep).and_return(pc)
-          allow(pc).to receive(:version).and_return(1)
-          allow(pc).to receive(:version=).with(incoming_version)
-          allow(pc).to receive(:size=).with(incoming_size)
-          allow(pc).to receive(:endpoint).with(ep)
-          allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-          allow(pc).to receive(:update_status)
-          allow(pc).to receive(:update_audit_timestamps)
-          allow(pc).to receive(:changed?).and_return(true)
-          allow(pc).to receive(:save!)
           allow(po_handler).to receive(:moab_validation_errors).and_return(['foo'])
+          expect(pc).to receive(:save!)
+          expect(po).not_to receive(:save!)
           po_handler.update_version_after_validation
-          expect(po).not_to have_received(:save!)
-          expect(pc).to have_received(:save!)
         end
 
         context 'incoming version newer than catalog versions (both) (happy path)' do
@@ -471,37 +376,26 @@ RSpec.describe PreservedObjectHandler do
         context 'db update error' do
           let(:result_code) { AuditResults::DB_UPDATE_FAILED }
 
-          context 'PreservedCopy' do
-            context 'ActiveRecordError' do
-              let(:results) do
-                allow(Rails.logger).to receive(:log)
-                po = instance_double('PreservedObject')
-                allow(po).to receive(:current_version).and_return(1)
-                allow(PreservedObject).to receive(:find_by!).with(druid: druid).and_return(po)
-                pc = instance_double('PreservedCopy')
-                allow(PreservedCopy).to receive(:find_by!).with(preserved_object: po, endpoint: ep).and_return(pc)
-                allow(pc).to receive(:version).and_return(1)
-                allow(pc).to receive(:version=)
-                allow(pc).to receive(:status).and_return(PreservedCopy::OK_STATUS)
-                allow(pc).to receive(:update_status)
-                allow(pc).to receive(:update_audit_timestamps)
-                allow(pc).to receive(:changed?).and_return(true)
-                allow(pc).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo')
-                allow(pc).to receive(:size=)
-                po_handler.update_version_after_validation
-              end
+          context 'PreservedCopy ActiveRecordError' do
+            let(:po) { build(:preserved_object) }
+            let(:pc) { build(:preserved_copy) }
+            let(:results) { po_handler.update_version_after_validation }
 
-              context 'DB_UPDATE_FAILED error' do
-                it 'prefix' do
-                  expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
-                end
-                it 'specific exception raised' do
-                  expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
-                end
-                it "exception's message" do
-                  expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
-                end
-              end
+            before do
+              allow(pc).to receive(:save!).and_raise(ActiveRecord::ActiveRecordError, 'foo')
+              allow(PreservedObject).to receive(:find_by!).with(druid: druid).and_return(po)
+              allow(PreservedCopy).to receive(:find_by!).with(preserved_object: po, endpoint: ep).and_return(pc)
+              allow(Rails.logger).to receive(:log)
+            end
+
+            it 'prefix' do
+              expect(results).to include(a_hash_including(result_code => a_string_matching(db_update_failed_prefix)))
+            end
+            it 'specific exception raised' do
+              expect(results).to include(a_hash_including(result_code => a_string_matching('ActiveRecord::ActiveRecordError')))
+            end
+            it "exception's message" do
+              expect(results).to include(a_hash_including(result_code => a_string_matching('foo')))
             end
           end
           # PreservedObject won't get updated if moab is invalid
