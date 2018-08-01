@@ -16,11 +16,11 @@ class S3WestDeliveryJob < ZipPartJobBase
   def perform(druid, version, part_s3_key, metadata)
     s3_part = bucket.object(part_s3_key) # Aws::S3::Object
     return if s3_part.exists?
-    s3_part.upload_file(
-      dvz_part.file,
-      metadata: stringify_values(metadata)
-    )
+    fh = dvz_part.file
+    s3_part.upload_file(fh, metadata: stringify_values(metadata))
     ResultsRecorderJob.perform_later(druid, version, part_s3_key, self.class.to_s)
+  ensure
+    fh.close unless fh.nil?
   end
 
   # coerce size int to string (all values must be strings)
